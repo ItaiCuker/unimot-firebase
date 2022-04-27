@@ -32,9 +32,9 @@ export const sendCommand = functions.region("europe-west1").runWith({
  */
 async function sendToDevice(deviceId:string, command:string) {
   const formattedName = client.devicePath(
-      "esp32-firebase-blink", // project id
-      "europe-west1", // cloud region
-      "Remotes", // registry id, should get from request
+      await client.getProjectId(), // project id
+      "europe-west1", // client region
+      "remotes", // registry id, my project uses only one.
       deviceId // device id
   );
 
@@ -49,3 +49,10 @@ async function sendToDevice(deviceId:string, command:string) {
   console.log("Sent command: ", (response) ? "succesful" : response);
   return response;
 }
+
+exports.devicePublish = functions.region("europe-west1").runWith({
+  minInstances: 1,
+  memory: "128MB",
+}).pubsub.topic("remote-data").onPublish((message) => {
+  console.log("Publish message: ", message.attributes, Buffer.from(message.data, "base64"));
+});
