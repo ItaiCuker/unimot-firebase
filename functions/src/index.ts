@@ -40,6 +40,7 @@ async function sendToRemote(req: any) {
       req.remoteId // remote id
   );
 
+  // send IR command?
   if (req.message === "send") {
     const command = (await commandsRef.doc(req.commandId).get()).data();
 
@@ -47,8 +48,8 @@ async function sendToRemote(req: any) {
     req.command = command;
   }
 
-
-  const binaryData = Buffer.from(JSON.stringify(req.command)); // parsing JSON to binary buffer.
+  // parsing JSON to binary buffer.
+  const binaryData = Buffer.from(JSON.stringify(req.command));
 
   const request = {
     name: formattedName,
@@ -83,13 +84,13 @@ exports.onRemotePublish = functions.region("europe-west1").runWith({
   const dataJson = JSON.parse(decodedData); // parsing data base64 encoded to JSON.
   console.log("Publish message: {%s,%s}", remoteId, dataJson);
 
-  // create command
+  // create command?
   if (dataJson.state === "create") {
     const commandId: string = dataJson.commandId;
     const commandName: string = dataJson.commandName;
 
-    // creating command:
-    const commandRef = !commandId ? commandsRef.doc() : commandsRef.doc(commandId); // creating command doc if commandId is empty string
+    // creating command doc if commandId is empty string
+    const commandRef = !commandId ? commandsRef.doc() : commandsRef.doc(commandId);
     promises.push(commandRef.set(
         {
           commandName: commandName,
@@ -97,8 +98,7 @@ exports.onRemotePublish = functions.region("europe-west1").runWith({
           command: dataJson.command,
         }
     ));
-
-    // updating device and remote:
+    // updating device with command and remote state:
     promises.push(devicesRef.doc(dataJson.deviceId).update(`commands.${commandName}`, commandRef.id));
     promises.push(remotesRef.doc(remoteId).update({state: ""}));
   } else {
