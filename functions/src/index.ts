@@ -18,34 +18,65 @@ const client = new iot.v1.DeviceManagerClient();
 
 /**
  * cloud function to send command to a remote
+ * also updates isOnline fields if command send was succesfull
  */
 export const sendCommand = functions.region("europe-west1").runWith({
   minInstances: 1,
   memory: "128MB",
-}).https.onCall((req) => {
+}).https.onCall(async (req) => {
   console.log("sendCommand: ", req);
-  return sendToRemote(req);
+
+  const promises: Promise<FirebaseFirestore.WriteResult>[] = []; // array of promises
+  const remoteId = req.remoteId;
+  let isOnline: boolean;
+
+  // trying send command and updating state of remote and device based on it.
+  try {
+    await sendToRemote(req, remoteId);
+    console.log("Assuming device is online after successful command");
+    isOnline = true;
+  } catch (error) {
+    console.log("Unable to send command", error);
+    isOnline = false;
+  }
+
+  // remote doc reference
+  const remoteDoc = remotesRef.doc(remoteId);
+  // updating isOnline field
+  promises.push(remoteDoc.update({isOnline: isOnline}));
+
+  // getting state field from remoteId doc
+  const state: string = (await remoteDoc.get()).get("state");
+  // assigning isAvailable:
+  const isAvailable = !state && isOnline;
+
+  // updating all devices linked to remote
+  (await updateDevicesStates(isAvailable, remoteId)).forEach((promise) => {
+    promises.push(promise);
+  });
+  return Promise.all(promises);
 });
 
 /**
  * function to send command to remote
  * @param req request to send to remote
+ * @param remoteId id of remote to send command to.
  * @returns promise of sendCommandToDevice function
  */
-async function sendToRemote(req: any) {
+async function sendToRemote(req: any, remoteId: string) {
   const formattedName = client.devicePath(
       projectId, // project id
       "europe-west1", // client region
       "remotes", // registry id, my project uses only one.
-      req.remoteId // remote id
+      remoteId // remote id
   );
 
   // send IR command?
   if (req.message === "send") {
     const command = (await commandsRef.doc(req.commandId).get()).data();
-
     console.log("remote command =", command);
     req.command = command;
+    req.command.message = "send";
   }
 
   // parsing JSON to binary buffer.
@@ -67,6 +98,22 @@ async function sendToRemote(req: any) {
       }
     });
   });
+}
+
+/**
+ * updates all isAvailable fields of devices linked to remote
+ * @param isAvailable state boolean
+ * @param remoteId id of remote
+ */
+async function updateDevicesStates(isAvailable: boolean, remoteId: string) {
+  const promises: Promise<FirebaseFirestore.WriteResult>[] = []; // array of promises
+  // updating all Device documents state that are linked to the Remote
+  (await devicesRef.where("remoteId", "==", remoteId).get())
+      .forEach((deviceSnap) => {
+        // updating isAvailable field for all Devices linked to Remote
+        promises.push(devicesRef.doc(deviceSnap.id).update({isAvailable: isAvailable}));
+      });
+  return promises;
 }
 
 /**
@@ -103,6 +150,7 @@ exports.onRemotePublish = functions.region("europe-west1").runWith({
     promises.push(remotesRef.doc(remoteId).update({state: ""}));
   } else {
     // any other publish message will update remote doc
+    dataJson.isOnline = true;
     promises.push(remotesRef.doc(remoteId).update(dataJson));
 
     // updating all devices linked to remote
@@ -112,62 +160,3 @@ exports.onRemotePublish = functions.region("europe-west1").runWith({
   }
   return Promise.all(promises);
 });
-
-/**
- * cloud function to run periodically to update remotes and devices state.
- */
-exports.getRemoteState = functions.region("europe-west1").pubsub.schedule("every 1 minutes").onRun( async () => {
-  const promises: Promise<FirebaseFirestore.WriteResult>[] = []; // array of promises
-  (await remotesRef.get()).forEach(async (doc) => {
-    // getting state remote for every remote in collection
-    const remoteId = doc.id;
-
-    let isOnline: boolean;
-    const request = {
-      remoteId: remoteId,
-      command: {alive: "?"},
-    };
-    try {
-      await sendToRemote(request);
-      console.log("Assuming device is online after succecfull alive? command");
-      isOnline = true;
-    } catch (error) {
-      console.log("Unable to send alive? command", error);
-      isOnline = false;
-    }
-
-    // remote doc reference
-    const remoteDoc = remotesRef.doc(remoteId);
-
-    // updating isOnline field
-    promises.push(remoteDoc.update({isOnline: isOnline}));
-
-    // getting state field from remoteId doc
-    const state: string = (await remoteDoc.get()).get("state");
-    // assigning isAvailable based these, while checking if state is null:
-    const isAvailable = !state && isOnline;
-
-    // updating all devices linked to remote
-    (await updateDevicesStates(isAvailable, remoteId)).forEach((promise) => {
-      promises.push(promise);
-    });
-  });
-  return Promise.all(promises);
-});
-
-
-/**
- * updates all devices linked to remote
- * @param isAvailable state boolean
- * @param remoteId id of remote
- */
-async function updateDevicesStates(isAvailable: boolean, remoteId: string) {
-  const promises: Promise<FirebaseFirestore.WriteResult>[] = []; // array of promises
-  // updating all Device documents state that are linked to the Remote
-  (await devicesRef.where("remoteId", "==", remoteId).get())
-      .forEach((deviceSnap) => {
-        // updating isAvailable field for all Devices linked to Remote
-        promises.push(devicesRef.doc(deviceSnap.id).update({isAvailable: isAvailable}));
-      });
-  return promises;
-}
